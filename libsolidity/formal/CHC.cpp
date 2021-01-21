@@ -1124,7 +1124,11 @@ Predicate const* CHC::createConstructorBlock(ContractDefinition const& _contract
 
 void CHC::createErrorBlock()
 {
-	m_errorPredicate = createSymbolicBlock(arity0FunctionSort(), "error_target_" + to_string(m_context.newUniqueId()), PredicateType::Error);
+	m_errorPredicate = createSymbolicBlock(
+		arity0FunctionSort(),
+		"error_target_" + to_string(m_context.newUniqueId()),
+		PredicateType::Error
+	);
 	m_interface->registerRelation(m_errorPredicate->functor());
 }
 
@@ -1214,6 +1218,7 @@ smtutil::Expression CHC::predicate(Predicate const& _block)
 	case PredicateType::ExternalCallUntrusted:
 		return smt::function(_block, m_currentContract, m_context);
 	case PredicateType::FunctionBlock:
+	case PredicateType::FunctionErrorBlock:
 		solAssert(m_currentFunction, "");
 		return functionBlock(_block, *m_currentFunction, m_currentContract, m_context);
 	case PredicateType::Error:
@@ -1349,7 +1354,6 @@ void CHC::verificationTargetEncountered(
 	smtutil::Expression const& _errorCondition
 )
 {
-
 	if (!m_settings.targets.has(_type))
 		return;
 
@@ -1370,13 +1374,18 @@ void CHC::verificationTargetEncountered(
 	auto previousError = errorFlag().currentValue();
 	errorFlag().increaseIndex();
 
-	// create an error edge to the summary
-	solAssert(m_errorDest, "");
+	Predicate const* localBlock = m_currentFunction ?
+		createBlock(m_currentFunction, PredicateType::FunctionErrorBlock) :
+		createConstructorBlock(*m_currentContract, "local_error");
+
+	auto pred = predicate(*localBlock);
 	connectBlocks(
 		m_currentBlock,
-		predicate(*m_errorDest),
+		pred,
 		_errorCondition && errorFlag().currentValue() == errorId
 	);
+	solAssert(m_errorDest, "");
+	addRule(smtutil::Expression::implies(pred, predicate(*m_errorDest)), pred.name);
 
 	m_context.addAssertion(errorFlag().currentValue() == previousError);
 }
@@ -1574,6 +1583,7 @@ optional<string> CHC::generateCounterexample(CHCSolverInterface::CexGraph const&
 			first = false;
 			/// Generate counterexample message local to the failed target.
 			localState = formatVariableModel(*stateVars, stateValues, ", ") + "\n";
+
 			if (auto calledFun = summaryPredicate->programFunction())
 			{
 				auto inValues = summaryPredicate->summaryPostInputValues(summaryArgs);
@@ -1584,6 +1594,33 @@ optional<string> CHC::generateCounterexample(CHCSolverInterface::CexGraph const&
 				auto const& outParams = calledFun->returnParameters();
 				if (auto outStr = formatVariableModel(outParams, outValues, "\n"); !outStr.empty())
 					localState += outStr + "\n";
+
+				optional<unsigned> localErrorId;
+				solidity::util::BreadthFirstSearch<unsigned> bfs{{summaryId}};
+				bfs.run([&](auto _nodeId, auto&& _addChild) {
+					auto const& edges = _graph.edges.at(_nodeId);
+					if (edges.size() == 1)
+					{
+						auto const* child = nodePred(edges.front());
+						if (child->isFunctionErrorBlock())
+						{
+							localErrorId = edges.front();
+							bfs.abort();
+						}
+					}
+					for (auto c: edges)
+						_addChild(c);
+				});
+
+				if (localErrorId.has_value())
+				{
+					auto const* localError = nodePred(*localErrorId);
+					auto localValues = localError->localVariableValues(nodeArgs(*localErrorId));
+					auto const& localVars = SMTEncoder::localVariablesIncludingModifiers(*localError->programFunction(), localError->contextContract());
+					solAssert(localError->isFunctionErrorBlock(), "");
+					if (auto localStr = formatVariableModel(localVars, localValues, "\n"); !localStr.empty())
+						localState += localStr + "\n";
+				}
 			}
 		}
 		else
