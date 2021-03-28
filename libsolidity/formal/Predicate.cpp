@@ -41,7 +41,8 @@ Predicate const* Predicate::create(
 	PredicateType _type,
 	EncodingContext& _context,
 	ASTNode const* _node,
-	ContractDefinition const* _contractContext
+	ContractDefinition const* _contractContext,
+	vector<ScopeOpener const*> _scopeStack
 )
 {
 	smt::SymbolicFunctionVariable predicate{_sort, move(_name), _context};
@@ -50,7 +51,7 @@ Predicate const* Predicate::create(
 	return &m_predicates.emplace(
 		std::piecewise_construct,
 		std::forward_as_tuple(functorName),
-		std::forward_as_tuple(move(predicate), _type, _node, _contractContext)
+		std::forward_as_tuple(move(predicate), _type, _node, _contractContext, move(_scopeStack))
 	).first->second;
 }
 
@@ -58,12 +59,14 @@ Predicate::Predicate(
 	smt::SymbolicFunctionVariable&& _predicate,
 	PredicateType _type,
 	ASTNode const* _node,
-	ContractDefinition const* _contractContext
+	ContractDefinition const* _contractContext,
+	vector<ScopeOpener const*> _scopeStack
 ):
 	m_predicate(move(_predicate)),
 	m_type(_type),
 	m_node(_node),
-	m_contractContext(_contractContext)
+	m_contractContext(_contractContext),
+	m_scopeStack(_scopeStack)
 {
 }
 
@@ -323,7 +326,7 @@ vector<optional<string>> Predicate::summaryPostOutputValues(vector<smtutil::Expr
 	return formatExpressions(outValues, outTypes);
 }
 
-vector<optional<string>> Predicate::localVariableValues(vector<smtutil::Expression> const& _args) const
+pair<vector<optional<string>>, vector<VariableDeclaration const*>> Predicate::localVariableValues(vector<smtutil::Expression> const& _args) const
 {
 	/// The signature of a local block predicate is: block(error, this, abiFunctions, cryptoFunctions, txData, preBlockchainState, preStateVars, preInputVars, postBlockchainState, postStateVars, postInputVars, outputVars, localVars).
 	/// Here we are interested in localVars.
@@ -334,8 +337,25 @@ vector<optional<string>> Predicate::localVariableValues(vector<smtutil::Expressi
 	auto first = _args.end() - static_cast<int>(localVars.size());
 	vector<smtutil::Expression> outValues(first, _args.end());
 
-	auto outTypes = applyMap(localVars, [](auto _var) { return _var->type(); });
-	return formatExpressions(outValues, outTypes);
+	auto inScope = [this](auto _var) -> bool {
+		for (auto _scope: m_scopeStack)
+		{
+			auto scope = dynamic_cast<ScopeOpener const*>(_var->scope());
+			solAssert(scope, "");
+			if (scope == _scope)
+				return true;
+		}
+		return false;
+	};
+	auto mask = applyMap(
+		localVars,
+		[&](auto _var) { return inScope(_var); }
+	);
+	auto localVarsInScope = util::filter(localVars, mask);
+	auto outValuesInScope = util::filter(outValues, mask);
+
+	auto outTypes = applyMap(localVarsInScope, [](auto _var) { return _var->type(); });
+	return {formatExpressions(outValuesInScope, outTypes), localVarsInScope};
 }
 
 vector<optional<string>> Predicate::formatExpressions(vector<smtutil::Expression> const& _exprs, vector<Type const*> const& _types) const

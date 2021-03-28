@@ -130,6 +130,8 @@ bool CHC::visit(ContractDefinition const& _contract)
 	initContract(_contract);
 	clearIndices(&_contract);
 
+	m_scopes.push_back(&_contract);
+
 	m_stateVariables = SMTEncoder::stateVariablesIncludingInheritedAndPrivate(_contract);
 	solAssert(m_currentContract, "");
 
@@ -208,6 +210,10 @@ void CHC::endVisit(ContractDefinition const& _contract)
 		m_queryPlaceholders[&_contract].push_back({txConstraints, errorFlag().currentValue(), m_currentBlock});
 		connectBlocks(m_currentBlock, interface(), txConstraints && errorFlag().currentValue() == 0);
 	}
+
+	solAssert(m_scopes.back() == &_contract, "");
+	m_scopes.pop_back();
+
 	SMTEncoder::endVisit(_contract);
 }
 
@@ -222,6 +228,8 @@ bool CHC::visit(FunctionDefinition const& _function)
 	// No inlining.
 	solAssert(!m_currentFunction, "Function inlining should not happen in CHC.");
 	m_currentFunction = &_function;
+
+	m_scopes.push_back(&_function);
 
 	initFunction(_function);
 
@@ -257,6 +265,9 @@ void CHC::endVisit(FunctionDefinition const& _function)
 	// No inlining.
 	solAssert(m_currentFunction == &_function, "");
 
+	solAssert(m_scopes.back() == &_function, "");
+	m_scopes.pop_back();
+
 	connectBlocks(m_currentBlock, summary(_function));
 	setCurrentBlock(*m_summaries.at(m_currentContract).at(&_function));
 
@@ -280,6 +291,19 @@ void CHC::endVisit(FunctionDefinition const& _function)
 	m_currentFunction = nullptr;
 
 	SMTEncoder::endVisit(_function);
+}
+
+bool CHC::visit(Block const& _block)
+{
+	m_scopes.push_back(&_block);
+	return SMTEncoder::visit(_block);
+}
+
+void CHC::endVisit(Block const& _block)
+{
+	solAssert(m_scopes.back() == &_block, "");
+	m_scopes.pop_back();
+	SMTEncoder::endVisit(_block);
 }
 
 bool CHC::visit(IfStatement const& _if)
@@ -382,6 +406,8 @@ bool CHC::visit(WhileStatement const& _while)
 
 bool CHC::visit(ForStatement const& _for)
 {
+	m_scopes.push_back(&_for);
+
 	bool unknownFunctionCallWasSeen = m_unknownFunctionCallSeen;
 	m_unknownFunctionCallSeen = false;
 
@@ -439,6 +465,12 @@ bool CHC::visit(ForStatement const& _for)
 	m_unknownFunctionCallSeen = unknownFunctionCallWasSeen;
 
 	return false;
+}
+
+void CHC::endVisit(ForStatement const& _for)
+{
+	solAssert(m_scopes.back() == &_for, "");
+	m_scopes.pop_back();
 }
 
 void CHC::endVisit(FunctionCall const& _funCall)
@@ -550,6 +582,18 @@ void CHC::endVisit(Return const& _return)
 	// Add an unreachable ghost node to collect unreachable statements after a return.
 	auto returnGhost = createBlock(&_return, PredicateType::FunctionBlock, "return_ghost_");
 	m_currentBlock = predicate(*returnGhost);
+}
+
+bool CHC::visit(TryCatchClause const& _tryStatement)
+{
+	m_scopes.push_back(&_tryStatement);
+	return SMTEncoder::visit(_tryStatement);
+}
+
+void CHC::endVisit(TryCatchClause const& _tryStatement)
+{
+	solAssert(m_scopes.back() == &_tryStatement, "");
+	m_scopes.pop_back();
 }
 
 bool CHC::visit(TryStatement const& _tryStatement)
@@ -949,7 +993,7 @@ SortPointer CHC::sort(ASTNode const* _node)
 
 Predicate const* CHC::createSymbolicBlock(SortPointer _sort, string const& _name, PredicateType _predType, ASTNode const* _node, ContractDefinition const* _contractContext)
 {
-	auto const* block = Predicate::create(_sort, _name, _predType, m_context, _node, _contractContext);
+	auto const* block = Predicate::create(_sort, _name, _predType, m_context, _node, _contractContext, m_scopes);
 	m_interface->registerRelation(block->functor());
 	return block;
 }
@@ -1615,9 +1659,8 @@ optional<string> CHC::generateCounterexample(CHCSolverInterface::CexGraph const&
 				if (localErrorId.has_value())
 				{
 					auto const* localError = nodePred(*localErrorId);
-					auto localValues = localError->localVariableValues(nodeArgs(*localErrorId));
-					auto const& localVars = SMTEncoder::localVariablesIncludingModifiers(*localError->programFunction(), localError->contextContract());
-					solAssert(localError->isFunctionErrorBlock(), "");
+					solAssert(localError && localError->isFunctionErrorBlock(), "");
+					auto [localValues, localVars] = localError->localVariableValues(nodeArgs(*localErrorId));
 					if (auto localStr = formatVariableModel(localVars, localValues, "\n"); !localStr.empty())
 						localState += localStr + "\n";
 				}

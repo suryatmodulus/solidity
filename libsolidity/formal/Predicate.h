@@ -57,14 +57,16 @@ public:
 		PredicateType _type,
 		smt::EncodingContext& _context,
 		ASTNode const* _node = nullptr,
-		ContractDefinition const* _contractContext = nullptr
+		ContractDefinition const* _contractContext = nullptr,
+		std::vector<ScopeOpener const*> _scopeStack = {}
 	);
 
 	Predicate(
 		smt::SymbolicFunctionVariable&& _predicate,
 		PredicateType _type,
 		ASTNode const* _node = nullptr,
-		ContractDefinition const* _contractContext = nullptr
+		ContractDefinition const* _contractContext = nullptr,
+		std::vector<ScopeOpener const*> _scopeStack = {}
 	);
 
 	/// Predicate should not be copiable.
@@ -155,7 +157,7 @@ public:
 	std::vector<std::optional<std::string>> summaryPostOutputValues(std::vector<smtutil::Expression> const& _args) const;
 
 	/// @returns the values of the local variables used by this predicate.
-	std::vector<std::optional<std::string>> localVariableValues(std::vector<smtutil::Expression> const& _args) const;
+	std::pair<std::vector<std::optional<std::string>>, std::vector<VariableDeclaration const*>> localVariableValues(std::vector<smtutil::Expression> const& _args) const;
 
 private:
 	/// @returns the formatted version of the given SMT expressions. Those expressions must be SMT constants.
@@ -191,6 +193,10 @@ private:
 	/// Maps the name of the predicate to the actual Predicate.
 	/// Used in counterexample generation.
 	static std::map<std::string, Predicate> m_predicates;
+
+	/// The scope stack when the predicate was created.
+	/// Used to identify the subset of variables in scope.
+	std::vector<ScopeOpener const*> const m_scopeStack;
 };
 
 }
