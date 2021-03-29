@@ -793,21 +793,22 @@ void CHC::makeOutOfBoundsVerificationTarget(IndexAccess const& _indexAccess)
 	if (_indexAccess.annotation().type->category() == Type::Category::TypeType)
 		return;
 
-	optional<smtutil::Expression> target;
 	auto baseType = _indexAccess.baseExpression().annotation().type;
+
+	optional<smtutil::Expression> length;
 	if (smt::isArray(*baseType))
-	{
-		auto arrayVar = dynamic_pointer_cast<smt::SymbolicArrayVariable>(
-			m_context.expression(_indexAccess.baseExpression())
-		);
-		if (auto index = _indexAccess.indexExpression(); index)
-			target = expr(*index) < 0 || expr(*index) >= arrayVar->length();
-	}
+		length = dynamic_cast<smt::SymbolicArrayVariable const&>(
+			*m_context.expression(_indexAccess.baseExpression())
+		).length();
 	else if (auto const* type = dynamic_cast<FixedBytesType const*>(baseType))
-	{
-		if (auto index = _indexAccess.indexExpression(); index)
-			target = expr(*index) < 0 || expr(*index) >= type->numBytes();
-	}
+		length = smtutil::Expression(static_cast<size_t>(type->numBytes()));
+
+	optional<smtutil::Expression> target;
+	if (
+		auto index = _indexAccess.indexExpression();
+		index && length
+	)
+		target = expr(*index) < 0 || expr(*index) >= *length;
 
 	if (target)
 		verificationTargetEncountered(&_indexAccess, VerificationTargetType::OutOfBounds, *target);
