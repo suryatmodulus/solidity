@@ -5,6 +5,9 @@ Language Features:
 
 Compiler Features:
  * Low-Level Inliner: Inline ordinary jumps to small blocks and jumps to small blocks that terminate.
+ * Commandline Interface: Model checker option ``--model-checker-targets`` also accepts ``outOfBounds``.
+ * SMTChecker: Report out of bounds index access for arrays and fixed bytes.
+ * Standard JSON: Model checker option ``settings.modelChecker.targets`` also accepts ``outOfBounds``.
 
 
 Bugfixes:
